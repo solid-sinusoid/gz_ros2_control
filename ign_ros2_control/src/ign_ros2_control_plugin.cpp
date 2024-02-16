@@ -449,6 +449,7 @@ void IgnitionROS2ControlPlugin::Configure(
       controllerManagerNodeName,
       this->dataPtr->node_->get_namespace()));
   this->dataPtr->executor_->add_node(this->dataPtr->controller_manager_);
+  this->dataPtr->controller_manager_->declare_parameter("robot_description", urdf_string);
 
   if (!this->dataPtr->controller_manager_->has_parameter("update_rate")) {
     RCLCPP_ERROR_STREAM(
