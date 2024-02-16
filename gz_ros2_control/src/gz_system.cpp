@@ -61,6 +61,8 @@
 #endif
 
 #include <hardware_interface/hardware_info.hpp>
+#include <hardware_interface/lexical_casts.hpp>
+#include <hardware_interface/types/hardware_interface_type_values.hpp>
 
 struct jointData
 {
@@ -84,6 +86,9 @@ struct jointData
 
   /// \brief Current cmd joint effort
   double joint_effort_cmd;
+
+  /// \brief flag if joint is actuated (has command interfaces) or passive
+  bool is_actuated;
 
   /// \brief handles to the joints from within Gazebo
   sim::Entity sim_joint;
@@ -172,6 +177,9 @@ public:
 
   /// \brief Gain which converts position error to a velocity command
   double position_proportional_gain_;
+
+  // Should hold the joints if no control_mode is active
+  bool hold_joints_ = true;
 };
 
 namespace gz_ros2_control
@@ -192,6 +200,31 @@ bool GazeboSimSystem::initSim(
   this->dataPtr->n_dof_ = hardware_info.joints.size();
 
   this->dataPtr->update_rate = &update_rate;
+
+  try {
+    this->dataPtr->hold_joints_ = this->nh_->get_parameter("hold_joints").as_bool();
+  } catch (rclcpp::exceptions::ParameterUninitializedException & ex) {
+    RCLCPP_ERROR(
+      this->nh_->get_logger(),
+      "Parameter 'hold_joints' not initialized, with error %s", ex.what());
+    RCLCPP_WARN_STREAM(
+      this->nh_->get_logger(), "Using default value: " << this->dataPtr->hold_joints_);
+  } catch (rclcpp::exceptions::ParameterNotDeclaredException & ex) {
+    RCLCPP_ERROR(
+      this->nh_->get_logger(),
+      "Parameter 'hold_joints' not declared, with error %s", ex.what());
+    RCLCPP_WARN_STREAM(
+      this->nh_->get_logger(), "Using default value: " << this->dataPtr->hold_joints_);
+  } catch (rclcpp::ParameterTypeException & ex) {
+    RCLCPP_ERROR(
+      this->nh_->get_logger(),
+      "Parameter 'hold_joints' has wrong type: %s", ex.what());
+    RCLCPP_WARN_STREAM(
+      this->nh_->get_logger(), "Using default value: " << this->dataPtr->hold_joints_);
+  }
+  RCLCPP_DEBUG_STREAM(
+    this->nh_->get_logger(), "hold_joints (system): " << this->dataPtr->hold_joints_ << std::endl);
+
 
   RCLCPP_DEBUG(this->nh_->get_logger(), "n_dof_ %lu", this->dataPtr->n_dof_);
 
@@ -268,7 +301,7 @@ bool GazeboSimSystem::initSim(
         hardware_info.joints.begin(), mimicked_joint_it);
       auto param_it = joint_info.parameters.find("multiplier");
       if (param_it != joint_info.parameters.end()) {
-        mimic_joint.multiplier = std::stod(joint_info.parameters.at("multiplier"));
+        mimic_joint.multiplier = hardware_interface::stod(joint_info.parameters.at("multiplier"));
       } else {
         mimic_joint.multiplier = 1.0;
       }
@@ -303,14 +336,25 @@ bool GazeboSimSystem::initSim(
 
     RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\tState:");
 
-    auto get_initial_value = [this](const hardware_interface::InterfaceInfo & interface_info) {
+    auto get_initial_value =
+      [this, joint_name](const hardware_interface::InterfaceInfo & interface_info) {
+        double initial_value{0.0};
         if (!interface_info.initial_value.empty()) {
-          double value = std::stod(interface_info.initial_value);
-          RCLCPP_INFO(this->nh_->get_logger(), "\t\t\t found initial value: %f", value);
-          return value;
-        } else {
-          return 0.0;
+          try {
+            initial_value = hardware_interface::stod(interface_info.initial_value);
+            RCLCPP_INFO(this->nh_->get_logger(), "\t\t\t found initial value: %f", initial_value);
+          } catch (std::invalid_argument &) {
+            RCLCPP_ERROR_STREAM(
+              this->nh_->get_logger(),
+              "Failed converting initial_value string to real number for the joint "
+                << joint_name
+                << " and state interface " << interface_info.name
+                << ". Actual value of parameter: " << interface_info.initial_value
+                << ". Initial value will be set to 0.0");
+            throw std::invalid_argument("Failed converting initial_value string");
+          }
         }
+        return initial_value;
       };
 
     double initial_position = std::numeric_limits<double>::quiet_NaN();
@@ -388,6 +432,9 @@ bool GazeboSimSystem::initSim(
         this->dataPtr->joints_[j].joint_velocity = initial_velocity;
       }
     }
+
+    // check if joint is actuated (has command interfaces) or passive
+    this->dataPtr->joints_[j].is_actuated = (joint_info.command_interfaces.size() > 0);
   }
 
   registerSensors(hardware_info);
@@ -652,8 +699,8 @@ hardware_interface::return_type GazeboSimSystem::write(
         *jointEffortCmd = sim::components::JointForceCmd(
           {this->dataPtr->joints_[i].joint_effort_cmd});
       }
-    } else {
-      // Fallback case is a velocity command of zero
+    } else if (this->dataPtr->joints_[i].is_actuated && this->dataPtr->hold_joints_) {
+      // Fallback case is a velocity command of zero (only for actuated joints)
       double target_vel = 0.0;
       auto vel =
         this->dataPtr->ecm->Component<sim::components::JointVelocityCmd>(
