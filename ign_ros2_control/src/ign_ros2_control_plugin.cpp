@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <rclcpp/init_options.hpp>
+#include <rclcpp/logging.hpp>
+#include <rclcpp/node_options.hpp>
+#include <rclcpp/utilities.hpp>
 #include <unistd.h>
 
 #include <chrono>
@@ -43,6 +47,7 @@
 
 #include "ign_ros2_control/ign_ros2_control_plugin.hpp"
 #include "ign_ros2_control/ign_system.hpp"
+#include "ign_ros2_control/ign_sensor_interface.hpp"
 
 namespace ign_ros2_control
 {
@@ -79,10 +84,15 @@ public:
   /// \brief Timing
   rclcpp::Duration control_period_ = rclcpp::Duration(1, 0);
 
-  /// \brief Interface loader
+  /// \brief SystemInterface loader
   std::shared_ptr<pluginlib::ClassLoader<
       ign_ros2_control::IgnitionSystemInterface>>
   robot_hw_sim_loader_{nullptr};
+
+  /// \brief Sensor interface loader
+  std::shared_ptr<pluginlib::ClassLoader<
+      ign_ros2_control::IgnitionSensorInterface>> 
+  robot_hw_sensor_sim_loader_{nullptr};
 
   /// \brief Controller manager
   std::shared_ptr<controller_manager::ControllerManager>
@@ -345,10 +355,56 @@ void IgnitionROS2ControlPlugin::Configure(
 
   // Create a default context, if not already
   if (!rclcpp::ok()) {
-    rclcpp::init(static_cast<int>(argv.size()), argv.data());
+    // rclcpp::init(0, nullptr);
+    rclcpp::init(static_cast<int>(argv.size()), argv.data(), rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
   }
 
   std::string node_name = "gz_ros2_control";
+
+  // auto no = rclcpp::NodeOptions()
+  //   .allow_undeclared_parameters(true)
+  //   .automatically_declare_parameters_from_overrides(true);
+  //
+  // no = no.arguments(arguments);
+
+  // rcl_params_t * params = rcl_yaml_node_struct_init(node_options.allocator());
+  // const char * yaml_file = arguments.at(2).c_str();
+  // RCLCPP_INFO(logger, "YAML filepath [%s]", yaml_file);
+  // if (rcl_parse_yaml_file(yaml_file, params)) {
+  //   auto g = rclcpp::parameter_map_from(params);
+  //   for (auto& par : g) {
+  //     auto s = par.second;
+  //     auto f = par.first;
+  //     RCLCPP_INFO(logger, "Parameter name: [%s]", f.c_str());
+  //     for (auto& inder : s) {
+  //       RCLCPP_WARN(logger, "%s: %s", (f + inder.get_name()).c_str(), inder.get_type_name().c_str());
+  //       node_options.append_parameter_override(inder.get_name(), inder.get_parameter_value());
+  //     }
+  //   }
+  // }
+
+  // auto rcl_cont = no.context()->weak_from_this();
+  // auto rcl_conte = rcl_cont.lock();
+  // rcl_arguments_t rcl_args = rcl_get_zero_initialized_arguments();
+  // rcl_ret_t rcl_ret = rcl_parse_arguments(
+  //   static_cast<int>(argv.size()),
+  //   argv.data(), rcl_get_default_allocator(), &rcl_args);
+  // rcl_conte->get_rcl_context()->global_arguments = rcl_args;
+  // if (rcl_ret != RCL_RET_OK) {
+  //   RCLCPP_ERROR(logger, "parser error %s\n", rcl_get_error_string().str);
+  //   rcl_reset_error();
+  //   return;
+  // }
+  // if (rcl_arguments_get_param_files_count(&rcl_args) < 1) {
+  //   RCLCPP_ERROR(
+  //     logger, "failed to parse input yaml file(s)");
+  //   return;
+  // }
+
+  // RCLCPP_ERROR(logger, "Node options: ");
+  // for (auto& arg : no.arguments()) {
+  //   RCLCPP_ERROR(logger, "%s", arg.c_str());
+  // }
 
   this->dataPtr->node_ = rclcpp::Node::make_shared(node_name, ns);
   this->dataPtr->executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
@@ -411,6 +467,18 @@ void IgnitionROS2ControlPlugin::Configure(
     return;
   }
 
+  try {
+    this->dataPtr->robot_hw_sensor_sim_loader_.reset(
+        new pluginlib::ClassLoader<ign_ros2_control::IgnitionSensorInterface>(
+            "ign_ros2_control",
+            "ign_ros2_control::IgnitionSensorInterface"));
+  }
+  catch(pluginlib::LibraryLoadException & ex) {
+    RCLCPP_ERROR(
+      this->dataPtr->node_->get_logger(), "Failed to create robot sensor simulation interface loader: %s ",
+      ex.what());
+  }
+
   for (unsigned int i = 0; i < control_hardware_info.size(); ++i) {
     std::string robot_hw_sim_type_str_ = control_hardware_info[i].hardware_class_type;
     std::unique_ptr<ign_ros2_control::IgnitionSystemInterface> ignitionSystem;
@@ -418,32 +486,63 @@ void IgnitionROS2ControlPlugin::Configure(
       this->dataPtr->node_->get_logger(), "Load hardware interface %s ...",
       robot_hw_sim_type_str_.c_str());
 
-    try {
-      ignitionSystem = std::unique_ptr<ign_ros2_control::IgnitionSystemInterface>(
-        this->dataPtr->robot_hw_sim_loader_->createUnmanagedInstance(robot_hw_sim_type_str_));
-    } catch (pluginlib::PluginlibException & ex) {
-      RCLCPP_ERROR(
-        this->dataPtr->node_->get_logger(),
-        "The plugin failed to load for some reason. Error: %s\n",
-        ex.what());
-      continue;
-    }
-    if (!ignitionSystem->initSim(
-        this->dataPtr->node_,
-        enabledJoints,
-        control_hardware_info[i],
-        _ecm,
-        this->dataPtr->update_rate))
+    if (control_hardware_info[i].type == "system" or control_hardware_info[i].type == "actuator")
     {
-      RCLCPP_FATAL(
-        this->dataPtr->node_->get_logger(), "Could not initialize robot simulation interface");
-      return;
-    }
-    RCLCPP_DEBUG(
-      this->dataPtr->node_->get_logger(), "Initialized robot simulation interface %s!",
-      robot_hw_sim_type_str_.c_str());
+        std::unique_ptr<ign_ros2_control::IgnitionSystemInterface> ignitionSystem;
+        try {
+        ignitionSystem = std::unique_ptr<ign_ros2_control::IgnitionSystemInterface>(
+            this->dataPtr->robot_hw_sim_loader_->createUnmanagedInstance(robot_hw_sim_type_str_));
+        } catch (pluginlib::PluginlibException & ex) {
+        RCLCPP_ERROR(
+            this->dataPtr->node_->get_logger(),
+            "The plugin failed to load for some reason. Error: %s\n",
+            ex.what());
+        continue;
+        }
+        if (!ignitionSystem->initSim(
+            this->dataPtr->node_,
+            enabledJoints,
+            control_hardware_info[i],
+            _ecm,
+            this->dataPtr->update_rate))
+        {
+        RCLCPP_FATAL(
+            this->dataPtr->node_->get_logger(), "Could not initialize robot system simulation interface");
+        return;
+        }
+        RCLCPP_DEBUG(
+        this->dataPtr->node_->get_logger(), "Initialized robot system simulation interface %s!",
+        robot_hw_sim_type_str_.c_str());
+        resource_manager_->import_component(std::move(ignitionSystem), control_hardware_info[i]);   
+    } else if (control_hardware_info[i].type == "sensor")
+    {
+        std::unique_ptr<ign_ros2_control::IgnitionSensorInterface> ignitionSensor;
+        try {
+        ignitionSensor = std::unique_ptr<ign_ros2_control::IgnitionSensorInterface>(
+            this->dataPtr->robot_hw_sensor_sim_loader_->createUnmanagedInstance(robot_hw_sim_type_str_));
+        } catch (pluginlib::PluginlibException & ex) {
+        RCLCPP_ERROR(
+            this->dataPtr->node_->get_logger(),
+            "The plugin failed to load for some reason. Error: %s\n",
+            ex.what());
+        continue;
+        }
+        if (!ignitionSensor->InitSensorInterface(
+            this->dataPtr->node_,
+            control_hardware_info[i],
+            _ecm,
+            this->dataPtr->update_rate))
+        {
+        RCLCPP_FATAL(
+            this->dataPtr->node_->get_logger(), "Could not initialize robot sensor simulation interface");
+        return;
+        }
+        RCLCPP_DEBUG(
+        this->dataPtr->node_->get_logger(), "Initialized robot sensor simulation interface %s!",
+        robot_hw_sim_type_str_.c_str());
 
-    resource_manager_->import_component(std::move(ignitionSystem), control_hardware_info[i]);
+        resource_manager_->import_component(std::move(ignitionSensor), control_hardware_info[i]); 
+    }
 
     rclcpp_lifecycle::State state(
       lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE,
@@ -461,6 +560,7 @@ void IgnitionROS2ControlPlugin::Configure(
       this->dataPtr->node_->get_namespace()));
   this->dataPtr->executor_->add_node(this->dataPtr->controller_manager_);
   this->dataPtr->controller_manager_->declare_parameter("robot_description", urdf_string);
+  auto pp = this->dataPtr->controller_manager_->get_node_parameters_interface();
 
   if (!this->dataPtr->controller_manager_->has_parameter("update_rate")) {
     RCLCPP_ERROR_STREAM(
