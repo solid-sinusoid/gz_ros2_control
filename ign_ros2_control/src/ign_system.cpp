@@ -25,7 +25,6 @@
 #include <rclcpp/logging.hpp>
 #include <sdf/Joint.hh>
 #include <sdf/JointAxis.hh>
-#include <sdformat-9.7/sdf/JointAxis.hh>
 #include <string>
 #include <utility>
 #include <vector>
