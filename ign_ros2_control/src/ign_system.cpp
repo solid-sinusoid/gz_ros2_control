@@ -652,22 +652,22 @@ hardware_interface::return_type IgnitionSystem::write(
 
       this->dataPtr->ecm->CreateComponent(
         this->dataPtr->joints_[mimic_joint.joint_index].sim_joint,
-        ignition::gazebo::components::JointVelocityReset({velocity_sp}));
+        ignition::gazebo::components::JointVelocityCmd({velocity_sp}));
     }
     if (this->dataPtr->joints_[mimic_joint.mimicked_joint_index].joint_control_method & VELOCITY) {
-      if (!this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityReset>(
+      if (!this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityCmd>(
           this->dataPtr->joints_[mimic_joint.joint_index].sim_joint))
       {
         this->dataPtr->ecm->CreateComponent(
           this->dataPtr->joints_[mimic_joint.joint_index].sim_joint,
-          ignition::gazebo::components::JointVelocityReset(
+          ignition::gazebo::components::JointVelocityCmd(
             {mimic_joint.multiplier *
               this->dataPtr->joints_[mimic_joint.mimicked_joint_index].joint_velocity_cmd}));
       } else {
         const auto jointVelCmd =
-          this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityReset>(
+          this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityCmd>(
           this->dataPtr->joints_[mimic_joint.joint_index].sim_joint);
-        *jointVelCmd = ignition::gazebo::components::JointVelocityReset(
+        *jointVelCmd = ignition::gazebo::components::JointVelocityCmd(
           {mimic_joint.multiplier *
             this->dataPtr->joints_[mimic_joint.mimicked_joint_index].joint_velocity_cmd});
       }
@@ -698,17 +698,17 @@ hardware_interface::return_type IgnitionSystem::write(
     }
 
     if (this->dataPtr->joints_[i].joint_control_method & VELOCITY) {
-      if (!this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityReset>(
+      if (!this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityCmd>(
           this->dataPtr->joints_[i].sim_joint))
       {
         this->dataPtr->ecm->CreateComponent(
           this->dataPtr->joints_[i].sim_joint,
-          ignition::gazebo::components::JointVelocityReset({0}));
+          ignition::gazebo::components::JointVelocityCmd({0}));
       } else {
         const auto jointVelCmd =
-          this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityReset>(
+          this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityCmd>(
           this->dataPtr->joints_[i].sim_joint);
-        *jointVelCmd = ignition::gazebo::components::JointVelocityReset(
+        *jointVelCmd = ignition::gazebo::components::JointVelocityCmd(
           {this->dataPtr->joints_[i].joint_velocity_cmd});
       }
     } else if (this->dataPtr->joints_[i].joint_control_method & POSITION) {
@@ -721,13 +721,13 @@ hardware_interface::return_type IgnitionSystem::write(
       double target_vel = -this->dataPtr->position_proportional_gain_ * error;
 
       auto vel =
-        this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityReset>(
+        this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityCmd>(
         this->dataPtr->joints_[i].sim_joint);
 
       if (vel == nullptr) {
         this->dataPtr->ecm->CreateComponent(
           this->dataPtr->joints_[i].sim_joint,
-          ignition::gazebo::components::JointVelocityReset({target_vel}));
+          ignition::gazebo::components::JointVelocityCmd({target_vel}));
       } else if (!vel->Data().empty()) {
         vel->Data()[0] = target_vel;
       }
@@ -749,13 +749,13 @@ hardware_interface::return_type IgnitionSystem::write(
       // Fallback case is a velocity command of zero (only for actuated joints)
       double target_vel = 0.0;
       auto vel =
-        this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityReset>(
+        this->dataPtr->ecm->Component<ignition::gazebo::components::JointVelocityCmd>(
         this->dataPtr->joints_[i].sim_joint);
 
       if (vel == nullptr) {
         this->dataPtr->ecm->CreateComponent(
           this->dataPtr->joints_[i].sim_joint,
-          ignition::gazebo::components::JointVelocityReset({target_vel}));
+          ignition::gazebo::components::JointVelocityCmd({target_vel}));
       } else if (!vel->Data().empty()) {
         vel->Data()[0] = target_vel;
       }
